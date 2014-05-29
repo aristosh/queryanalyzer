@@ -1,0 +1,917 @@
+* (C) Aristo Suryawardhana Hadisoeganda, 2012
+*     all right reserved
+*
+*  PLEASE DO NOT REDISTRIBUTE WITHOUT AUTHOR'S PERMISSION
+*
+*&---------------------------------------------------------------------*
+*& Report  Z_QUERY_ANALYZER
+*&
+*&---------------------------------------------------------------------*
+*& Change request   : $TMP
+*& Functional Design: Aristo
+*& Technical Design : Aristo
+*&
+*& Summary: Query Analyzer for ABAP
+*&---------------------------------------------------------------------*
+*& Developer        : Aristo
+*& Date             : 22 Aug 2012
+*& Description      : Initial Creation
+*&---------------------------------------------------------------------*
+*& Developer        : Aristo
+*& Date             : 23 Aug 2012
+*& Description      : Add Aggregate Functions
+*&---------------------------------------------------------------------*
+*& Developer        : Aristo
+*& Date             : 27 Aug 2012
+*& Description      : Add technical name check box
+*&---------------------------------------------------------------------*
+*& Developer        : Aristo
+*& Date             : 16 Oct 2012
+*& Description      : Fix bugs with technical name
+*&---------------------------------------------------------------------*
+REPORT  z_query_analyzer.
+
+TYPES ty_line         TYPE char512.
+TYPES ty_long_line    TYPE char2048.
+TYPES ty_query_type   TYPE i.
+TYPES ty_select_mode  TYPE i.
+
+TYPES:
+  BEGIN OF ty_keyword_hierarchy,
+    keyword TYPE ty_line,
+    prev    TYPE ty_line,
+    mode    TYPE ty_select_mode,
+  END OF ty_keyword_hierarchy.
+
+TYPES:
+  BEGIN OF ty_fields,
+    field_name  TYPE dd03l-fieldname,
+    field_type  TYPE dd03l-rollname,
+    table_name  TYPE dd03l-tabname,
+    field_count TYPE n LENGTH 3,
+    field_order TYPE i,
+  END OF ty_fields.
+
+TYPES tt_lines             TYPE STANDARD TABLE OF ty_line.
+TYPES tt_fields            TYPE STANDARD TABLE OF ty_fields.
+TYPES tt_keyword_hierarchy TYPE STANDARD TABLE OF ty_keyword_hierarchy.
+TYPES tt_long_line         TYPE STANDARD TABLE OF ty_long_line.
+
+CONSTANTS c_keyword_select         TYPE ty_line VALUE 'SELECT'.
+CONSTANTS c_keyword_max            TYPE ty_line VALUE 'MAX('.
+CONSTANTS c_keyword_min            TYPE ty_line VALUE 'MIN('.
+CONSTANTS c_keyword_avg            TYPE ty_line VALUE 'AVG('.
+CONSTANTS c_keyword_sum            TYPE ty_line VALUE 'SUM('.
+CONSTANTS c_keyword_count_with_col TYPE ty_line VALUE 'COUNT('.
+CONSTANTS c_keyword_count          TYPE ty_line VALUE 'COUNT(*)'.
+CONSTANTS c_keyword_distinct       TYPE ty_line VALUE 'DISTINCT'.
+CONSTANTS c_keyword_up             TYPE ty_line VALUE 'UP'.
+CONSTANTS c_keyword_from           TYPE ty_line VALUE 'FROM'.
+CONSTANTS c_keyword_where          TYPE ty_line VALUE 'WHERE'.
+CONSTANTS c_keyword_inner          TYPE ty_line VALUE 'INNER'.
+CONSTANTS c_keyword_join           TYPE ty_line VALUE 'JOIN'.
+CONSTANTS c_keyword_left           TYPE ty_line VALUE 'LEFT'.
+CONSTANTS c_keyword_outer          TYPE ty_line VALUE 'OUTER'.
+CONSTANTS c_keyword_on             TYPE ty_line VALUE 'ON'.
+CONSTANTS c_keyword_and            TYPE ty_line VALUE 'AND'.
+CONSTANTS c_keyword_or             TYPE ty_line VALUE 'OR'.
+CONSTANTS c_keyword_in             TYPE ty_line VALUE 'IN'.
+CONSTANTS c_keyword_as             TYPE ty_line VALUE 'AS'.
+CONSTANTS c_keyword_none           TYPE ty_line VALUE space.
+CONSTANTS c_keyword_insert         TYPE ty_line VALUE 'INSERT'.
+CONSTANTS c_keyword_delete         TYPE ty_line VALUE 'DELETE'.
+CONSTANTS c_keyword_update         TYPE ty_line VALUE 'UPDATE'.
+
+CONSTANTS c_query_type_invalid TYPE ty_query_type VALUE 0.
+CONSTANTS c_query_type_select  TYPE ty_query_type VALUE 1.
+CONSTANTS c_query_type_insert  TYPE ty_query_type VALUE 2.
+CONSTANTS c_query_type_delete  TYPE ty_query_type VALUE 3.
+CONSTANTS c_query_type_update  TYPE ty_query_type VALUE 4.
+
+CONSTANTS c_select_mode_nomode       TYPE ty_select_mode VALUE 0.
+CONSTANTS c_select_mode_field        TYPE ty_select_mode VALUE 1.
+CONSTANTS c_select_mode_table        TYPE ty_select_mode VALUE 2.
+CONSTANTS c_select_mode_column_alias TYPE ty_select_mode VALUE 3.
+CONSTANTS c_select_mode_table_alias  TYPE ty_select_mode VALUE 4.
+CONSTANTS c_select_mode_count        TYPE ty_select_mode VALUE 5.
+CONSTANTS c_select_mode_parent       TYPE ty_select_mode VALUE 6.
+
+DATA o_docking            TYPE REF TO cl_gui_docking_container .
+DATA o_editor             TYPE REF TO cl_gui_textedit.
+DATA it_fields            TYPE tt_fields.
+DATA it_words             TYPE tt_lines.
+DATA it_keyword_hierarchy TYPE tt_keyword_hierarchy.
+DATA it_long_text         TYPE tt_long_line.
+DATA v_long_text          TYPE ty_long_line.
+DATA v_query_type         TYPE ty_query_type.
+
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS cb_tname TYPE c MODIF ID md1 AS CHECKBOX.
+SELECTION-SCREEN COMMENT 3(20) lb_tname.
+SELECTION-SCREEN END OF LINE.
+
+INITIALIZATION.
+  PERFORM set_keyword_hierarchy CHANGING it_keyword_hierarchy.
+
+AT SELECTION-SCREEN OUTPUT.
+  PERFORM set_screen_attributes.
+  PERFORM set_text_area CHANGING o_docking o_editor.
+
+START-OF-SELECTION.
+  PERFORM get_text_codes       USING o_editor
+                               CHANGING it_long_text.
+
+  LOOP AT it_long_text INTO v_long_text.
+    PERFORM fetch_field USING    v_long_text
+                                 it_keyword_hierarchy
+                        CHANGING it_fields
+                                 it_words
+                                 v_query_type.
+
+    PERFORM remember_field_order CHANGING it_fields.
+    PERFORM rename_duplicate_fields CHANGING it_fields.
+
+    PERFORM generate_subroutine_pool USING it_words it_fields v_query_type.
+  ENDLOOP.
+
+*        .....    ,   ..                       .  . . .  .
+*       . ... :=++,  ..                         .. ,   :=,  .. .
+*        . IDMMNDNMMD. ..                      .  . $MNDDNNM7,.,
+*         =DNNNNNNNMDM+ .  ..     ........  ...  ,+MNNNNNNNDNN~
+*        8NDMNNNNNNMDMN8: ...,,,,,,,,,,,,,,,....,MM8DNNNNNNNMNM7
+*       .MNNDNNNMMMMMMNO?::,,,,,,,,,..,,,,,,,,,,,IMMNNNNNNNNNNNM
+*        MNNMNNNMMMMM7=.:,,,,,,,,,..,,....,,,..,.,,=MNNNMMMNMNNM
+*       .NNDMMMDMNMI=,,,,,,,,,...............,,,.,,.,~8NMMNMMNM8
+*        :MMNMNMM7:::,,,.,,....................,...,,.:=MNMNMNM~
+*         .NNMM=:,:,,,,..,..........................,.,.,:ZNMN..
+*       .. :M=:.,,,..,,.... .,.....................,..,.:.:~8: ,
+*           .,,.,..:=ZDDOI.,,:,............, ,?MMMMNI=.,.~ ,. .
+*        . ,,:.,:7MMMMMNNNMM: ,,....,,....,,+MMMMMMMNMMI,  ...
+*        ..,:,,$MNDMMMMMMMDMMO,,,......,,,,MMMMNMMNNMNMNM:. ,,..
+*       ...,,MMDMMNMMMMMMMMMNMI.,,,,.,,..:NNNMMNMMMMMMMMNMM$,..
+*         ,.7MDMMM=~:,:=MMMNMMM:.,,,,,,.,?MMMMNM+=II=:~MMNMM:,..
+*        ..?MMNM=:MMMMMM:ZMMMNM~,.,...,.:OMMMMM~OMMMMMM7~MMNN..
+*       .,,MNNMIMMNMNMMMZ~MMNMM~,,,,,.,,,OMMNMM7MNMMMMDNM=MMM7..
+*        ,:MNM?IMNMMMMMMM=MMMMI,,,,,...,,?MMNMZMMMMMMMMMNO?MMM,.
+*        ,:MNMNMMMNMMMMMMMMNDM:,,,.,,,.,.:MNMMNMMMMMMMNMMMMMMM,
+*        .~MMNMMMMMMMMMMMMMDM8,,.,.,.,..,,~MNMMMMMMMMNMMMMNMMM,.
+*       ..:MMMMMMMMMMMMMMNMMZ:,,:8MMMM8+.,,MMMMMMMNNMMMMMMMMMM..
+*         ,MMMMMMMMMMMMMMNMM.:.?NNNMNMMM= ,~ZNMMMNMMMMMMMMMMMM..
+*       ...=MMMMMMMMMNNMM8:,.,,~OMMNNNMM~,...:MMNNMMMMMMMMMNM:..
+*      ....:~MMMMMMMMMM7.,,,.:,.,~=?+=~,:,:,,:.$NMNMNMMMMMMM.~...
+*      ....,:~$MMMMMD=,.,.,:,.:.: ,:.... ,:,...,..ZNMMMMMZ+:,,...
+*       .. .,:,,:,:,:,.,,,.,.:,,, ..?., ,....:....,,,::,,:::,....
+*       .....:~~:~~=:..,,,,.M7,,.:.NMM,,,..=M..,,.,:~~==~:::.. .
+*  .  .... ....:==~~=,.,,,,,,,I$ZI~.,,?8MMO,.,,,,,~~=~~~=:.... ..  ..
+* .   .... .. ..~===~,,,,,,,,,,,,,,,,,,.,:.,:..,.,~~~~~~~,.... .....
+*  .. .... ......,~~:::,,,,,,,,,,,,::,,,,....,,,,,::==~:,.........  .
+* . ...,~+=,......,,:::,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,.......,=~,. ...
+* ..,$MDNNNNNMNM~::,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,.,~MMNNDNNNDDI .
+*   DNDNNNNNNMMN~:,,,,,,,,,,,,......,,,,,,..,,,,,,,,,:.,,7MNNNDDDM8NM
+* ..MNNNNNNNNMN:.,:,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,, ,.::8MNNNNNDNNM.
+* . MDMDNMNNMM~,.,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,...,.,:,DNNNNMDMDM.
+*  .MNNNNMNNNI,.,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,...,+NMMNNMNNM...
+*  ,MNNMMNMNM:,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,.MNNNNMD8M ..
+* . ~NNNMMMMN:,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,OMMNMNMM:...
+*    .MNNMDMI:,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,IMNMNNM .
+* ., , ~MNMM?::,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,?MMM$ . .
+*   . .,.,,=~:::,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,~I:. , .
+*    .  .   .:::::,,,:,,,,,,,,::::::,,,::::,,,,,,,,,,,,,,,,,. .. . ...
+*       . . .::::::,:::::::::::::::::::::::::,,,,,,,,,,,,,,,. ..
+*       .   .:::::::::::::::::::::::::::::::::::,,,,,,,,,,,:..
+*           .:::::::::::::::::::::::::::::::::::::,,,,,,,,,,..
+*            :::::::::::::::::::::::::::::::::::::::,,:,,:,,  ..
+*            ,:::::::::::::::::::::::::::::::::::::::::,,:,.  ..
+*            .,::::::::::::::::::::~~~:::::::::::::::::::,.   .
+*             .,:::::::::~::::::~~~~~~~~~~:~~::::::::::::.  ..
+*            ...:~:~:::~~~~~::~~~~~~=~=~~=~~~~:::~::~::~,..
+*            . ...:::::::~:=~~?$$. .,...I+===~~:::::,,:   .
+*              . .NMZ~::~:=+ONNNI. . .. ONMZI=~,::,~$MM  ..
+*            .  ..MDNMMMMMMNMNNM+. .   .$MNNNNMMMMMNNNM ...
+*            . . .MDNNNMNNNNMMDM~...   .?MNMNNNMMMNNNNM   .
+*            . ...8DDNMNMNNNMMNM:,,::,:,~NNNMNMMNNMMNMZ.. .
+*             . ...7MNNMNNNNMMO=~~~:::::~~ZMNMNNNMNMNI.   .
+*                   +MMNMNNMM8=~~::,,,::~~=OMMMMNNMM=,.  ..
+*                  . ,:==~=~,,,,...,,....,,,,~===+:,.   .
+*                  . .     . ....       ..  ...   . . .   .
+                  .   . .  ..   .......   ..      .. .. ..
+*&---------------------------------------------------------------------*
+*&      DEFINE  MC_ADD_AGGRFUNC_TO_HIER
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+DEFINE mc_add_aggrfunc_to_hier.
+  &1-prev = c_keyword_max.
+  append &1 to &2.
+  &1-prev = c_keyword_min.
+  append &1 to &2.
+  &1-prev = c_keyword_avg.
+  append &1 to &2.
+  &1-prev = c_keyword_sum.
+  append &1 to &2.
+  &1-prev = c_keyword_count_with_col.
+  append &1 to &2.
+END-OF-DEFINITION.
+
+*&---------------------------------------------------------------------*
+*&      Form  SET_SCREEN_ATTRIBUTES
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM set_screen_attributes .
+  lb_tname = 'Technical Names'.
+ENDFORM.                    " SET_SCREEN_ATTRIBUTES
+*&---------------------------------------------------------------------*
+*&      Form  SET_TEXT_AREA
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM set_text_area  CHANGING p_o_docking TYPE REF TO cl_gui_docking_container
+                             p_o_editor  TYPE REF TO cl_gui_textedit.
+
+  DATA l_it_text    TYPE tt_lines.
+  DATA l_v_repid    TYPE char255.
+
+  IF p_o_docking IS INITIAL .
+    CREATE OBJECT p_o_docking
+      EXPORTING
+        repid = sy-repid
+        dynnr = sy-dynnr
+        side = cl_gui_docking_container=>dock_at_top
+        extension = '256'
+      EXCEPTIONS
+        cntl_error = 1
+        cntl_system_error = 2
+        create_error = 3
+        lifetime_error = 4
+        lifetime_dynpro_dynpro_link = 5.
+  ENDIF.
+
+  IF p_o_editor IS INITIAL.
+    CREATE OBJECT p_o_editor
+      EXPORTING
+        parent = p_o_docking
+        wordwrap_mode = cl_gui_textedit=>wordwrap_at_fixed_position
+        wordwrap_position = 256
+        max_number_chars = 100000.
+  ENDIF .
+
+  l_v_repid = sy-repid.
+  IMPORT it_text = l_it_text cb_tname = cb_tname FROM MEMORY ID l_v_repid.
+
+  p_o_editor->set_text_as_r3table( table = l_it_text ).
+  cl_gui_textedit=>set_focus( p_o_editor ).
+
+ENDFORM.                    " SET_TEXT_AREA
+*&---------------------------------------------------------------------*
+*&      Form  FETCH_FIELD
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM fetch_field  USING    p_v_long_text  TYPE ty_long_line
+                           p_it_hierarchy TYPE tt_keyword_hierarchy
+                  CHANGING p_it_fields    TYPE tt_fields
+                           p_it_words     TYPE tt_lines
+                           p_v_query_type TYPE ty_query_type.
+
+
+  DATA l_v_word         TYPE ty_line.
+  DATA l_v_prev_keyword TYPE ty_keyword_hierarchy-prev.
+  DATA l_v_table_name   TYPE ty_line.
+  DATA l_v_mode         TYPE ty_select_mode.
+  DATA l_wa_hierarchy   TYPE ty_keyword_hierarchy.
+
+  REFRESH p_it_fields.
+  CLEAR l_wa_hierarchy.
+  SPLIT p_v_long_text AT space INTO TABLE p_it_words.
+
+  "$ Region QUERY TYPE
+  " first word
+  CLEAR l_v_word.
+  READ TABLE p_it_words INTO l_v_word INDEX 1.
+  CASE l_v_word.
+    WHEN c_keyword_select.
+      p_v_query_type = c_query_type_select.
+    WHEN c_keyword_insert.
+      p_v_query_type = c_query_type_insert.
+    WHEN c_keyword_delete.
+      p_v_query_type = c_query_type_delete.
+    WHEN c_keyword_update.
+      p_v_query_type = c_query_type_update.
+    WHEN OTHERS.
+      p_v_query_type = c_query_type_invalid.
+      MESSAGE 'Invalid query' TYPE 'S' DISPLAY LIKE 'E'.
+      LEAVE LIST-PROCESSING.
+  ENDCASE.
+  "$ Endregion QUERY TYPE
+
+  LOOP AT p_it_words INTO l_v_word WHERE table_line IS NOT INITIAL AND table_line <> ')'.
+    READ TABLE p_it_hierarchy INTO l_wa_hierarchy WITH KEY keyword = l_v_word
+                                                           prev    = l_v_prev_keyword
+                                                           BINARY SEARCH.
+    IF sy-subrc = 0.
+      "$ Region SELECT MODE
+      l_v_prev_keyword = l_wa_hierarchy-keyword.
+      IF l_wa_hierarchy-mode <> c_select_mode_parent.
+        l_v_mode = l_wa_hierarchy-mode.
+      ELSE.
+        " c_select_mode_PARENT : L_V_MODE keeps previous mode
+      ENDIF.
+      "$ Endregion SELECT MODE
+
+    ELSE.
+      CASE l_v_mode.
+        WHEN c_select_mode_count.
+          PERFORM determine_field_name USING    c_keyword_count_with_col
+                                       CHANGING p_it_fields.
+
+        WHEN c_select_mode_field.
+          PERFORM determine_field_name USING    l_v_word
+                                       CHANGING p_it_fields.
+
+        WHEN c_select_mode_column_alias.
+          l_v_mode = c_select_mode_field.
+          CONTINUE. " ignore column alias
+
+        WHEN c_select_mode_table.
+          PERFORM determine_table      USING    l_v_word
+                                       CHANGING p_it_fields.
+          l_v_table_name = l_v_word.
+        WHEN c_select_mode_table_alias.
+          PERFORM rename_alias      USING    l_v_table_name
+                                             l_v_word
+                                    CHANGING p_it_fields.
+        WHEN c_select_mode_nomode.
+          " do nothing
+      ENDCASE.
+    ENDIF.
+
+  ENDLOOP.
+ENDFORM.                    " FETCH_FIELD
+*&---------------------------------------------------------------------*
+*&      Form  DETERMINE_FIELD_NAME
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM determine_field_name  USING    p_v_word    TYPE ty_line
+                           CHANGING p_it_fields TYPE tt_fields.
+
+  DATA l_wa_fields    TYPE ty_fields.
+
+  IF p_v_word = c_keyword_count OR p_v_word = c_keyword_count_with_col.
+    l_wa_fields-table_name = p_v_word.
+    l_wa_fields-field_name = 'COUNT'.
+  ELSE.
+    SPLIT p_v_word AT '~' INTO l_wa_fields-table_name l_wa_fields-field_name.
+    IF l_wa_fields-field_name IS INITIAL.
+      l_wa_fields-field_name = l_wa_fields-table_name.
+      CLEAR l_wa_fields-table_name.
+    ELSE.
+      CONCATENATE l_wa_fields-table_name l_wa_fields-field_name INTO l_wa_fields-field_type SEPARATED BY '-'.
+    ENDIF.
+  ENDIF.
+  APPEND l_wa_fields TO p_it_fields.
+
+ENDFORM.                    " DETERMINE_FIELD_NAME
+*&---------------------------------------------------------------------*
+*&      Form  DETERMINE_TABLE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM determine_table  USING    p_v_table_name TYPE ty_line
+                      CHANGING p_it_fields    TYPE tt_fields.
+  FIELD-SYMBOLS <l_wa_fields> TYPE ty_fields.
+  DATA l_v_fieldname      TYPE dd03l-fieldname.
+  DATA l_v_rollname       TYPE dd03l-rollname.
+
+  LOOP AT p_it_fields ASSIGNING <l_wa_fields> WHERE table_name IS INITIAL        OR
+                                                    field_type IS INITIAL        OR
+                                                    table_name = c_keyword_count OR
+                                                    table_name = c_keyword_count_with_col.
+    IF <l_wa_fields>-field_name = 'COUNT'.
+      <l_wa_fields>-field_type = 'I'.
+    ELSEIF <l_wa_fields>-field_name = '*'.
+      <l_wa_fields>-table_name = p_v_table_name.
+    ELSE.
+      SELECT SINGLE fieldname rollname
+        INTO (l_v_fieldname, l_v_rollname)
+        FROM dd03l
+        WHERE tabname   = p_v_table_name         AND
+              fieldname = <l_wa_fields>-field_name AND
+              as4local  = 'A'                    AND
+              as4vers   = space.
+      IF sy-subrc = 0.
+        <l_wa_fields>-table_name = p_v_table_name.
+        CONCATENATE p_v_table_name <l_wa_fields>-field_name INTO <l_wa_fields>-field_type SEPARATED BY '-'.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+ENDFORM.                    " DETERMINE_TABLE
+*&---------------------------------------------------------------------*
+*&      Form  SET_KEYWORD_HIERARCHY
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM set_keyword_hierarchy  CHANGING p_it_keyword_hierarchy TYPE tt_keyword_hierarchy.
+  DATA l_wa_keyword_hierarchy TYPE ty_keyword_hierarchy.
+
+  "$ Region SELECT
+  l_wa_keyword_hierarchy-keyword = c_keyword_select.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_field.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_none.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion SELECT
+
+  "$ Region MAX
+  l_wa_keyword_hierarchy-keyword = c_keyword_max.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_field.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_select.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_distinct.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  mc_add_aggrfunc_to_hier l_wa_keyword_hierarchy p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_as.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion MAX
+
+  "$ Region MIN
+  l_wa_keyword_hierarchy-keyword = c_keyword_min.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_field.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_select.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_distinct.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  mc_add_aggrfunc_to_hier l_wa_keyword_hierarchy p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_as.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion MIN
+
+  "$ Region AVG
+  l_wa_keyword_hierarchy-keyword = c_keyword_avg.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_field.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_select.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_distinct.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  mc_add_aggrfunc_to_hier l_wa_keyword_hierarchy p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_as.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion AVG
+
+  "$ Region SUM
+  l_wa_keyword_hierarchy-keyword = c_keyword_sum.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_field.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_select.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_distinct.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  mc_add_aggrfunc_to_hier l_wa_keyword_hierarchy p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_as.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion SUM
+
+  "$ Region COUNT
+  " COUNT( DISTINCT col )
+  l_wa_keyword_hierarchy-keyword = c_keyword_count_with_col.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_count.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_select.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_distinct.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  mc_add_aggrfunc_to_hier l_wa_keyword_hierarchy p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_as.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+
+  " don't insert COUNT(*) in keyword hierarchy
+  " because COUNT(*) is considered as normal field;
+  " COUNT(*) is different from COUNT( DISTINCT col )
+  "$ Endregion COUNT
+
+  "$ Region DISTINCT
+  l_wa_keyword_hierarchy-keyword = c_keyword_distinct.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_parent.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_select.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  mc_add_aggrfunc_to_hier l_wa_keyword_hierarchy p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_as.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion DISTINCT
+
+
+  "$ Region UP
+  l_wa_keyword_hierarchy-keyword = c_keyword_up.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_nomode.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_select.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_distinct.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  mc_add_aggrfunc_to_hier l_wa_keyword_hierarchy p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_as.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion UP
+
+  "$ Region FROM
+
+  l_wa_keyword_hierarchy-keyword = c_keyword_from.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_table.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_select.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_distinct.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_up.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  mc_add_aggrfunc_to_hier l_wa_keyword_hierarchy p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_as.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion FROM
+
+  "$ Region WHERE
+  l_wa_keyword_hierarchy-keyword = c_keyword_where.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_nomode.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_from.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_on.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_as.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion WHERE
+
+  "$ Region JOIN
+  l_wa_keyword_hierarchy-keyword = c_keyword_join.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_table.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_from.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_inner.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_on.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_as.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion JOIN
+
+  "$ Region INNER
+  l_wa_keyword_hierarchy-keyword = c_keyword_inner.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_nomode.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_from.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_on.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_as.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion INNER
+
+  "$ Region LEFT
+  l_wa_keyword_hierarchy-keyword = c_keyword_left.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_nomode.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_from.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_as.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion LEFT
+
+  "$ Region OUTER
+  l_wa_keyword_hierarchy-keyword = c_keyword_outer.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_nomode.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_left.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion OUTER
+
+  "$ Region ON
+  l_wa_keyword_hierarchy-keyword = c_keyword_on.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_nomode.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_join.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_as.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion ON
+
+  "$ Region AS
+  l_wa_keyword_hierarchy-keyword = c_keyword_as.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_table_alias.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_from.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_join.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+
+  l_wa_keyword_hierarchy-keyword = c_keyword_as.
+  l_wa_keyword_hierarchy-mode    = c_select_mode_column_alias.
+
+  l_wa_keyword_hierarchy-prev = c_keyword_select.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_distinct.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  mc_add_aggrfunc_to_hier l_wa_keyword_hierarchy p_it_keyword_hierarchy.
+  l_wa_keyword_hierarchy-prev = c_keyword_as.
+  APPEND l_wa_keyword_hierarchy TO p_it_keyword_hierarchy.
+  "$ Endregion AS
+
+  SORT p_it_keyword_hierarchy.
+
+ENDFORM.                    " SET_KEYWORD_HIERARCHY
+*&---------------------------------------------------------------------*
+*&      Form  RENAME_ALIAS
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM rename_alias  USING    p_v_table_name TYPE ty_line
+                            p_v_alias      TYPE ty_line
+                   CHANGING p_it_fields    TYPE tt_fields.
+
+  FIELD-SYMBOLS <l_wa_fields> TYPE ty_fields.
+
+  LOOP AT p_it_fields ASSIGNING <l_wa_fields> WHERE table_name = p_v_alias.
+    <l_wa_fields>-table_name = p_v_table_name.
+    CONCATENATE <l_wa_fields>-table_name <l_wa_fields>-field_name INTO <l_wa_fields>-field_type SEPARATED BY '-'.
+  ENDLOOP.
+
+ENDFORM.                    " RENAME_ALIAS
+*&---------------------------------------------------------------------*
+*&      Form  GENERATE_SUBROUTINE_POOL
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM generate_subroutine_pool  USING    p_it_words     TYPE tt_lines
+                                        p_it_fields    TYPE tt_fields
+                                        p_v_query_type TYPE ty_query_type.
+
+  DATA l_it_code            TYPE tt_lines.
+  DATA l_v_progam           TYPE char10.
+  DATA l_wa_fields          TYPE ty_fields.
+  DATA l_v_code             TYPE ty_line.
+  DATA l_v_words            TYPE ty_line.
+  DATA l_v_len              TYPE i.
+  DATA l_v_annoying_count   TYPE c.
+  DATA l_v_annoying_counter TYPE n LENGTH 3.
+  DATA l_v_field_name       TYPE char512.
+  DATA l_char_tabix         TYPE char10.
+
+  DATA l_v_message TYPE char255.
+  DATA l_v_line    TYPE i.
+
+  CLEAR l_v_annoying_count.
+
+  APPEND 'PROGRAM.' TO l_it_code.
+
+  CASE p_v_query_type.
+    WHEN c_query_type_select.
+      "$ Region set display table structure
+      APPEND 'TYPES BEGIN OF ty_report.' TO l_it_code.
+      LOOP AT p_it_fields INTO l_wa_fields.
+        IF l_wa_fields-table_name = c_keyword_count.
+          l_v_annoying_count = 'X'.
+        ENDIF.
+
+        IF l_wa_fields-field_name = '*'.
+          CONCATENATE 'INCLUDE TYPE' l_wa_fields-table_name '.' INTO l_v_code SEPARATED BY space.
+        ELSE.
+          CONCATENATE l_wa_fields-field_name l_wa_fields-field_count INTO l_v_field_name.
+          CONCATENATE 'TYPES' l_v_field_name 'TYPE' l_wa_fields-field_type '.' INTO l_v_code SEPARATED BY space.
+        ENDIF.
+        APPEND l_v_code TO l_it_code.
+      ENDLOOP.
+      APPEND 'TYPES END OF ty_report.' TO l_it_code.
+      "$ Endregion set display table structure
+
+      APPEND '' TO l_it_code.
+      APPEND 'FORM execute_sql.' TO l_it_code.
+      APPEND 'DATA l_it_report        TYPE STANDARD TABLE OF ty_report.' TO l_it_code.
+      APPEND 'DATA l_wa_report        TYPE                   ty_report.' TO l_it_code.
+      APPEND 'DATA l_o_salv_table     TYPE REF TO cl_salv_table.' TO l_it_code.
+      APPEND 'DATA l_o_salv_column    TYPE REF TO cl_salv_column.' TO l_it_code.
+      APPEND 'DATA l_o_salv_columns   TYPE REF TO cl_salv_columns.' TO l_it_code.
+      APPEND 'DATA l_o_salv_functions TYPE REF TO cl_salv_functions_list.' TO l_it_code.
+      APPEND 'DATA l_it_salv_columns  TYPE salv_t_column_ref.' TO l_it_code.
+      APPEND 'DATA l_wa_salv_column   TYPE salv_s_column_ref.' TO l_it_code.
+      APPEND 'DATA l_v_columnname     TYPE lvc_fname.' TO l_it_code.
+      APPEND 'DATA l_v_scrtext_s      TYPE scrtext_s.' TO l_it_code.
+      APPEND 'DATA l_v_scrtext_m      TYPE scrtext_m.' TO l_it_code.
+      APPEND 'DATA l_v_scrtext_l      TYPE scrtext_l.' TO l_it_code.
+      APPEND '' TO l_it_code.
+
+      CLEAR l_v_code.
+      LOOP AT p_it_words INTO l_v_words.
+        IF l_v_words = c_keyword_from.
+          IF l_v_annoying_count = 'X'.
+            "$ Region ANNOYING COUNT PART
+            CLEAR l_v_annoying_counter.
+            CLEAR l_v_field_name.
+            LOOP AT p_it_fields INTO l_wa_fields WHERE table_name = c_keyword_count.
+              CONCATENATE ',' 'l_wa_report-' l_wa_fields-field_name l_v_annoying_counter l_v_field_name
+                INTO l_v_field_name.
+              ADD 1 TO l_v_annoying_counter.
+            ENDLOOP. " @ LOOP AT p_it_fields
+
+            SHIFT l_v_field_name LEFT DELETING LEADING ','.
+            CONCATENATE '(' l_v_field_name ')' INTO l_v_field_name.
+            CONCATENATE l_v_code 'INTO' l_v_field_name INTO l_v_code SEPARATED BY space.
+            "$ Endregion ANNOYING COUNT PART
+          ELSE.
+            CONCATENATE l_v_code 'INTO TABLE l_it_report' INTO l_v_code SEPARATED BY space.
+          ENDIF.
+        ENDIF.
+        CONCATENATE l_v_code l_v_words INTO l_v_code SEPARATED BY space.
+
+        l_v_len = strlen( l_v_code ).
+        IF l_v_len > 100.
+          APPEND l_v_code TO l_it_code.
+          CLEAR l_v_code.
+        ENDIF.
+      ENDLOOP. " @ LOOP AT p_it_words
+      CONCATENATE l_v_code '.' INTO l_v_code.
+      APPEND l_v_code TO l_it_code.
+
+      IF l_v_annoying_count = 'X'.
+        APPEND 'APPEND l_wa_report TO l_it_report.' TO l_it_code.
+      ENDIF.
+
+      APPEND 'TRY.' TO l_it_code.
+      APPEND '  CALL METHOD cl_salv_table=>factory' TO l_it_code.
+      APPEND '    IMPORTING' TO l_it_code.
+      APPEND '      r_salv_table   = l_o_salv_table' TO l_it_code.
+      APPEND '    CHANGING' TO l_it_code.
+      APPEND '      t_table        = l_it_report.' TO l_it_code.
+      APPEND '' TO l_it_code.
+      APPEND '  l_o_salv_columns =  l_o_salv_table->get_columns( ).' TO l_it_code.
+      APPEND '  l_o_salv_columns->set_optimize( ''X'' ).' TO l_it_code.
+      APPEND '' TO l_it_code.
+      IF cb_tname = 'X'.
+        "$ Region set technical name
+        APPEND 'l_it_salv_columns = l_o_salv_columns->get( ).' TO l_it_code.
+        LOOP AT p_it_fields INTO l_wa_fields.
+          IF l_wa_fields-field_name = '*'.
+            APPEND 'l_it_salv_columns = l_o_salv_columns->get( ).' TO l_it_code.
+            APPEND 'LOOP AT l_it_salv_columns INTO l_wa_salv_column.' TO l_it_code.
+            APPEND '  l_v_columnname = l_wa_salv_column-r_column->get_columnname( ).' TO l_it_code.
+            APPEND '  l_v_scrtext_s = l_v_scrtext_m = l_v_scrtext_l = l_v_columnname.' TO l_it_code.
+            APPEND '  l_wa_salv_column-r_column->set_short_text( l_v_scrtext_s ).' TO l_it_code.
+            APPEND '  l_wa_salv_column-r_column->set_medium_text( l_v_scrtext_m ).' TO l_it_code.
+            APPEND '  l_wa_salv_column-r_column->set_long_text( l_v_scrtext_l ).' TO l_it_code.
+            APPEND 'ENDLOOP.' TO l_it_code.
+          ELSE.
+            l_char_tabix = sy-tabix.
+            CONCATENATE 'READ TABLE l_it_salv_columns INTO l_wa_salv_column INDEX' l_char_tabix '.' INTO l_v_code.
+            APPEND l_v_code TO l_it_code.
+            APPEND 'IF sy-subrc = 0.' TO l_it_code.
+            CONCATENATE 'l_v_scrtext_s = l_v_scrtext_m = l_v_scrtext_l = ''' l_wa_fields-field_type '''.' INTO l_v_code.
+            APPEND l_v_code TO l_it_code.
+            APPEND '  l_wa_salv_column-r_column->set_short_text( l_v_scrtext_s ).' TO l_it_code.
+            APPEND '  l_wa_salv_column-r_column->set_medium_text( l_v_scrtext_m ).' TO l_it_code.
+            APPEND '  l_wa_salv_column-r_column->set_long_text( l_v_scrtext_l ).' TO l_it_code.
+            APPEND 'ENDIF.' TO l_it_code.
+          ENDIF.
+        ENDLOOP.
+        "$ Endregion set technical name
+      ENDIF.
+      APPEND '' TO l_it_code.
+      APPEND '  l_o_salv_functions = l_o_salv_table->get_functions( ).' TO l_it_code.
+      APPEND '  l_o_salv_functions->set_all( ''X'' ).' TO l_it_code.
+      APPEND '' TO l_it_code.
+      APPEND '  l_o_salv_table->display( ).' TO l_it_code.
+      APPEND 'CATCH cx_salv_msg .' TO l_it_code.
+      APPEND 'ENDTRY.' TO l_it_code.
+      APPEND 'ENDFORM.' TO l_it_code.
+
+    WHEN c_query_type_insert OR c_query_type_delete OR c_query_type_update.
+      APPEND 'FORM execute_sql.' TO l_it_code.
+      CLEAR l_v_code.
+      LOOP AT p_it_words INTO l_v_words.
+        CONCATENATE l_v_code l_v_words INTO l_v_code SEPARATED BY space.
+
+        l_v_len = strlen( l_v_code ).
+        IF l_v_len > 100.
+          APPEND l_v_code TO l_it_code.
+          CLEAR l_v_code.
+        ENDIF.
+      ENDLOOP. " @ LOOP AT p_it_wordss
+      CONCATENATE l_v_code '.' INTO l_v_code.
+      APPEND l_v_code TO l_it_code.
+      APPEND 'IF sy-subrc = 0.' TO l_it_code.
+      APPEND 'COMMIT WORK AND WAIT.' TO l_it_code.
+      APPEND 'MESSAGE ''Query Successfully Executed'' TYPE ''I'' DISPLAY LIKE ''S''.' TO l_it_code.
+      APPEND 'ENDIF.' TO l_it_code.
+      APPEND 'ENDFORM.' TO l_it_code.
+    WHEN OTHERS.
+
+  ENDCASE.
+
+  GENERATE SUBROUTINE POOL l_it_code NAME l_v_progam MESSAGE l_v_message LINE l_v_line.
+  IF sy-subrc <> 0.
+    MESSAGE l_v_message TYPE 'I' DISPLAY LIKE 'E'.
+  ELSE.
+    PERFORM execute_sql IN PROGRAM (l_v_progam) IF FOUND.
+  ENDIF.
+
+ENDFORM.                    " GENERATE_SUBROUTINE_POOL
+*&---------------------------------------------------------------------*
+*&      Form  GET_TEXT_CODES
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM get_text_codes  USING    p_o_editor     TYPE REF TO cl_gui_textedit
+                     CHANGING p_it_long_text TYPE tt_long_line.
+
+
+  DATA l_v_repid          TYPE char255.
+  DATA l_v_text           TYPE ty_line.
+  DATA l_it_text          TYPE tt_lines.
+  DATA l_v_offset         TYPE i.
+  DATA l_v_long_text      TYPE ty_long_line.
+
+  p_o_editor->get_text_as_r3table( IMPORTING table = l_it_text ).
+
+  l_v_repid = sy-repid.
+  EXPORT it_text = l_it_text cb_tname = cb_tname TO MEMORY ID l_v_repid.
+
+  CLEAR p_it_long_text[].
+  CLEAR l_v_long_text.
+  LOOP AT l_it_text INTO l_v_text.
+    CONDENSE l_v_text.
+    TRANSLATE l_v_text TO UPPER CASE.
+
+    FIND FIRST OCCURRENCE OF '"' IN l_v_text MATCH OFFSET l_v_offset.  " line comment
+    IF sy-subrc <> 0.
+      CONCATENATE l_v_long_text l_v_text INTO l_v_long_text SEPARATED BY space.
+    ELSEIF l_v_offset > 0.
+      CONCATENATE l_v_long_text l_v_text(l_v_offset) INTO l_v_long_text SEPARATED BY space.
+    ENDIF.
+
+    DO.
+      FIND FIRST OCCURRENCE OF '.' IN l_v_long_text MATCH OFFSET l_v_offset.
+      IF sy-subrc <> 0.
+        EXIT.
+      ELSEIF l_v_offset > 0.
+        CONDENSE l_v_long_text(l_v_offset).
+        REPLACE ALL OCCURRENCES OF 'COUNT( * )'
+          IN l_v_long_text(l_v_offset)
+          WITH c_keyword_count.
+
+        APPEND l_v_long_text(l_v_offset) TO p_it_long_text.
+
+        ADD 1 TO l_v_offset.
+        l_v_long_text = l_v_long_text+l_v_offset.
+      ELSE.
+        ADD 1 TO l_v_offset.
+        l_v_long_text = l_v_long_text+l_v_offset.
+      ENDIF.
+    ENDDO.
+  ENDLOOP. " @ LOOP AT l_it_text
+  IF l_v_long_text IS NOT INITIAL.
+    CONDENSE l_v_long_text.
+    REPLACE ALL OCCURRENCES OF 'COUNT( * )'
+      IN l_v_long_text
+      WITH c_keyword_count.
+    APPEND l_v_long_text TO p_it_long_text.
+  ENDIF.
+ENDFORM.                    " GET_TEXT_CODES
+*&---------------------------------------------------------------------*
+*&      Form  RENAME_DUPLICATE_FIELDS
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM rename_duplicate_fields  CHANGING p_it_fields TYPE tt_fields.
+  DATA l_wa_fields TYPE ty_fields.
+  DATA l_v_counter TYPE i.
+
+  SORT p_it_fields.
+
+  LOOP AT p_it_fields INTO l_wa_fields.
+    AT NEW field_name.
+      CLEAR l_v_counter.
+    ENDAT.
+
+    l_wa_fields-field_count = l_v_counter.
+    ADD 1 TO l_v_counter.
+
+    MODIFY p_it_fields FROM l_wa_fields.
+  ENDLOOP.
+
+  SORT p_it_fields BY field_order.
+ENDFORM.                    " RENAME_DUPLICATE_FIELDS
+*&---------------------------------------------------------------------*
+*&      Form  REMEMBER_FIELD_ORDER
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM remember_field_order  CHANGING p_it_fields TYPE tt_fields.
+  FIELD-SYMBOLS <l_wa_field> TYPE ty_fields.
+
+  LOOP AT p_it_fields ASSIGNING <l_wa_field>.
+    <l_wa_field>-field_order = sy-tabix.
+  ENDLOOP.
+ENDFORM.                    " REMEMBER_FIELD_ORDER

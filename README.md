@@ -5,4 +5,5 @@ Query Analyzer for ABAP with editor. Supports OpenSQL syntax for Select, Insert,
 For SELECT statement, just remove the 'INTO TABLE itab' from normal ABAP SELECT statement 
 
 Example:
+--------
 SELECT k~ebeln p~ebelp FROM EKKO k JOIN EKPO p ON k~eben = p~ebelp. 
